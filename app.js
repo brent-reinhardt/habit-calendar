@@ -1,3 +1,22 @@
+// ===== DIAGNOSTICS (shows JS errors on-screen) =====
+(function () {
+  function show(msg) {
+    let box = document.getElementById("diagBox");
+    if (!box) {
+      box = document.createElement("div");
+      box.id = "diagBox";
+      box.style.cssText =
+        "position:fixed;left:12px;right:12px;bottom:12px;z-index:99999;" +
+        "background:#111;border:1px solid #444;border-radius:12px;" +
+        "padding:10px;color:#fff;font:12px/1.3 system-ui;white-space:pre-wrap;";
+      document.body.appendChild(box);
+    }
+    box.textContent = msg;
+  }
+
+  window.addEventListener("error", (e) => show("JS error:\n" + (e?.message || e)));
+  window.addEventListener("unhandledrejection", (e) => show("Promise error:\n" + (e?.reason?.message || e?.reason || e)));
+})();
 /* =========================
    SUPABASE CONFIG (PASTE YOURS HERE)
    ========================= */
@@ -1052,15 +1071,33 @@ saveTemplateBtn.addEventListener("click", () => {
    ========================= */
 
 signInBtn.addEventListener("click", async () => {
-  if (!supabaseClient) {
-    alert("Supabase not configured yet. Paste your SUPABASE_URL and SUPABASE_ANON_KEY in app.js.");
-    return;
+  // Visual proof that the click handler is firing
+  setSyncStatus("Sign-in clicked…");
+
+  try {
+    if (!supabaseClient) {
+      alert("Supabase not configured yet. Paste SUPABASE_URL and SUPABASE key in app.js.");
+      setSyncStatus("Local only (no Supabase config)");
+      return;
+    }
+
+    const email = String(authEmailEl.value || "").trim();
+    if (!email.includes("@")) {
+      alert("Enter a valid email address.");
+      setSyncStatus("Local only (enter email)");
+      return;
+    }
+
+    setSyncStatus("Sending magic link…");
+    await signInWithMagicLink(email);
+    setSyncStatus("Magic link sent — check your email");
+  } catch (e) {
+    console.error(e);
+    alert("Sign-in failed: " + (e?.message || String(e)));
+    setSyncStatus("Sign-in error (see console)");
   }
-  const email = String(authEmailEl.value || "").trim();
-  if (!email.includes("@")) {
-    alert("Enter a valid email address.");
-    return;
-  }
+});
+
 
   try {
     setSyncStatus("Sending magic link…");
@@ -1120,3 +1157,4 @@ if (document.readyState === "loading") {
     await startSupabaseListeners();
   })();
 }
+
