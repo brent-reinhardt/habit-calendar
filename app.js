@@ -1,12 +1,21 @@
 /* =========================
-   Idiot-proof boot + guards
+   SUPABASE CONFIG (PASTE YOURS HERE)
+   ========================= */
+
+// Get these from Supabase Dashboard → Project Settings → API
+const SUPABASE_URL = "https://xvosoyhpgtyaingkkntz.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_vkaOHeSXGU63eLfpS5_rLg_DCuIi1Dc";
+
+// Table name created in Supabase SQL step
+const SUPABASE_TABLE = "habit_store";
+
+/* =========================
+   Idiot-proof guards
    ========================= */
 
 (function bootGuard() {
-  // If app.js is running at all, show it in the console.
   console.log("[HabitCalendar] app.js loaded");
 
-  // Basic DOM guard (helps catch mismatched index.html)
   const requiredIds = [
     "calendar","selectedDateTitle","checklist","daySummary",
     "markAllBtn","clearDayBtn","todayBtn",
@@ -15,7 +24,8 @@
     "editTemplateBtn","templateModal","modalBackdrop","closeModalBtn",
     "cancelModalBtn","saveTemplateBtn","resetTemplateBtn","dayTabs",
     "editorDayName","taskEditorList","addTaskBtn",
-    "exportBtn","importInput","wipeBtn"
+    "exportBtn","importInput","wipeBtn",
+    "authEmail","signInBtn","signOutBtn","syncStatus"
   ];
 
   const missing = requiredIds.filter(id => !document.getElementById(id));
@@ -23,9 +33,8 @@
     document.body.innerHTML =
       `<div style="padding:16px;font-family:system-ui;color:#fff;background:#111;">
         <h2>App setup error</h2>
-        <p>These elements are missing from <code>index.html</code>:</p>
+        <p>Missing from <code>index.html</code>:</p>
         <pre style="white-space:pre-wrap;background:#222;padding:12px;border-radius:8px;">${missing.join(", ")}</pre>
-        <p><strong>Fix:</strong> replace <code>index.html</code> with the fresh version I provided.</p>
       </div>`;
     throw new Error("Missing DOM IDs: " + missing.join(", "));
   }
@@ -35,7 +44,7 @@
    Storage keys
    ========================= */
 
-const STORAGE_KEY = "habitCalendar.v2";
+const STORAGE_KEY = "habitCalendar.v3";
 const FIRST_DAY_OF_WEEK = 1; // Monday
 
 /* =========================
@@ -144,32 +153,204 @@ function autoMetaForLabel(label) {
 }
 
 /* =========================
-   Storage (template + date data)
+   SUPABASE CLIENT + SYNC
    ========================= */
 
-function loadStore() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { template: deepClone(defaultTemplate), data: {} };
-    const parsed = JSON.parse(raw);
-    if (!parsed.template) parsed.template = deepClone(defaultTemplate);
-    if (!parsed.data) parsed.data = {};
-    return parsed;
-  } catch {
-    return { template: deepClone(defaultTemplate), data: {} };
+const authEmailEl = document.getElementById("authEmail");
+const signInBtn = document.getElementById("signInBtn");
+const signOutBtn = document.getElementById("signOutBtn");
+const syncStatusEl = document.getElementById("syncStatus");
+
+function setSyncStatus(text) {
+  syncStatusEl.textContent = text;
+}
+
+function hasSupabaseConfig() {
+  return SUPABASE_URL.startsWith("http") && SUPABASE_ANON_KEY.length > 30;
+}
+
+const supabaseClient = (hasSupabaseConfig() && window.supabase && window.supabase.createClient)
+  ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+  : null;
+
+let currentUserId = null;
+let cloudPushTimer = null;
+let cloudPullInFlight = false;
+let cloudPushInFlight = false;
+
+async function refreshAuthState() {
+  if (!supabaseClient) {
+    setSyncStatus("Local only (no Supabase config)");
+    signOutBtn.classList.add("hidden");
+    return;
+  }
+
+  const { data: { session } } = await supabaseClient.auth.getSession();
+  currentUserId = session?.user?.id || null;
+
+  if (currentUserId) {
+    signOutBtn.classList.remove("hidden");
+    signInBtn.textContent = "Email link again";
+    setSyncStatus("Signed in • syncing…");
+  } else {
+    signOutBtn.classList.add("hidden");
+    signInBtn.textContent = "Sign in";
+    setSyncStatus("Local only (sign in to sync)");
   }
 }
 
-function saveStore(store) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+function getRedirectUrlForMagicLink() {
+  // GitHub Pages: keep it simple—redirect back to this exact page
+  return window.location.origin + window.location.pathname;
 }
+
+async function signInWithMagicLink(email) {
+  const { error } = await supabaseClient.auth.signInWithOtp({
+    email,
+    options: { emailRedirectTo: getRedirectUrlForMagicLink() }
+  });
+  // signInWithOtp is the Supabase method for email magic links/OTPs. :contentReference[oaicite:4]{index=4}
+  if (error) throw error;
+}
+
+async function signOut() {
+  const { error } = await supabaseClient.auth.signOut();
+  if (error) throw error;
+}
+
+function loadLocalStoreRaw() {
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+function ensureLocalStoreShape(store) {
+  const s = store || {};
+  if (!s.template) s.template = deepClone(defaultTemplate);
+  if (!s.data) s.data = {};
+  if (typeof s.updated_ms !== "number") s.updated_ms = 0;
+  return s;
+}
+
+function saveLocalStore(store, { suppressCloud = false } = {}) {
+  const s = ensureLocalStoreShape(store);
+  s.updated_ms = Date.now();
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
+  if (!suppressCloud) scheduleCloudPush();
+}
+
+function loadStore() {
+  const s = ensureLocalStoreShape(loadLocalStoreRaw());
+  if (!loadLocalStoreRaw()) {
+    // First boot: seed defaults
+    saveLocalStore(s, { suppressCloud: true });
+  }
+  return s;
+}
+
+function scheduleCloudPush() {
+  if (!supabaseClient || !currentUserId) return;
+  if (cloudPullInFlight) return;
+
+  if (cloudPushTimer) clearTimeout(cloudPushTimer);
+  cloudPushTimer = setTimeout(() => {
+    cloudPushTimer = null;
+    void pushLocalToCloud();
+  }, 900);
+}
+
+async function fetchCloudRow() {
+  const { data, error } = await supabaseClient
+    .from(SUPABASE_TABLE)
+    .select("store, updated_ms")
+    .eq("user_id", currentUserId)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data; // null or {store, updated_ms}
+}
+
+async function upsertCloudRow(localStore) {
+  const payload = [{
+    user_id: currentUserId,
+    store: { template: localStore.template, data: localStore.data, updated_ms: localStore.updated_ms },
+    updated_ms: localStore.updated_ms
+  }];
+
+  const { error } = await supabaseClient
+    .from(SUPABASE_TABLE)
+    .upsert(payload, { onConflict: "user_id" });
+
+  // Supabase upsert requires primary key/onConflict to match. :contentReference[oaicite:5]{index=5}
+  if (error) throw error;
+}
+
+async function pullCloudToLocal() {
+  if (!supabaseClient || !currentUserId) return;
+
+  cloudPullInFlight = true;
+  try {
+    const local = loadStore();
+    const remote = await fetchCloudRow();
+
+    if (!remote) {
+      // No cloud row yet → seed it from local
+      await upsertCloudRow(local);
+      setSyncStatus("Synced (cloud initialized)");
+      return;
+    }
+
+    const remoteUpdated = Number(remote.updated_ms || 0);
+    const localUpdated = Number(local.updated_ms || 0);
+
+    if (remoteUpdated > localUpdated) {
+      // Remote wins → overwrite local (don’t trigger push)
+      const merged = ensureLocalStoreShape(remote.store);
+      merged.updated_ms = remoteUpdated;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+      setSyncStatus("Synced (pulled from cloud)");
+    } else if (localUpdated > remoteUpdated) {
+      // Local wins → push
+      await upsertCloudRow(local);
+      setSyncStatus("Synced (pushed local)");
+    } else {
+      setSyncStatus("Synced");
+    }
+  } catch (e) {
+    console.error(e);
+    setSyncStatus("Sync error (still tracking locally)");
+  } finally {
+    cloudPullInFlight = false;
+  }
+}
+
+async function pushLocalToCloud() {
+  if (!supabaseClient || !currentUserId) return;
+  if (cloudPushInFlight) return;
+
+  cloudPushInFlight = true;
+  try {
+    const local = loadStore();
+    await upsertCloudRow(local);
+    setSyncStatus("Synced");
+  } catch (e) {
+    console.error(e);
+    setSyncStatus("Sync error (local-only for now)");
+  } finally {
+    cloudPushInFlight = false;
+  }
+}
+
+/* =========================
+   Per-date + template helpers
+   ========================= */
 
 function loadTemplate() { return loadStore().template; }
 
 function saveTemplate(template) {
   const store = loadStore();
   store.template = template;
-  saveStore(store);
+  saveLocalStore(store);
 }
 
 function loadAllData() { return loadStore().data; }
@@ -177,7 +358,7 @@ function loadAllData() { return loadStore().data; }
 function saveAllData(data) {
   const store = loadStore();
   store.data = data;
-  saveStore(store);
+  saveLocalStore(store);
 }
 
 function loadDay(dateStr) {
@@ -263,12 +444,8 @@ function computeBestStreak() {
   let cur = min;
 
   while (cur <= max) {
-    if (isFullyComplete(cur)) {
-      run += 1;
-      best = Math.max(best, run);
-    } else {
-      run = 0;
-    }
+    if (isFullyComplete(cur)) { run += 1; best = Math.max(best, run); }
+    else { run = 0; }
     cur = addDays(cur, 1);
   }
   return best;
@@ -279,10 +456,7 @@ function computeBestStreak() {
    ========================= */
 
 function computeWeeklyTotals(weekStartStr) {
-  let done = 0;
-  let total = 0;
-  let daysComplete = 0;
-  let daysWithTasks = 0;
+  let done = 0, total = 0, daysComplete = 0, daysWithTasks = 0;
 
   for (let i = 0; i < 7; i++) {
     const d = addDays(weekStartStr, i);
@@ -322,12 +496,7 @@ function buildMissedReport(daysBack) {
 
     if (missing.length > 0) {
       incompleteDays += 1;
-      items.push({
-        dateStr: d,
-        done,
-        total,
-        missingLabels: missing.map(t => t.label),
-      });
+      items.push({ dateStr: d, done, total, missingLabels: missing.map(t => t.label) });
     }
   }
 
@@ -335,7 +504,7 @@ function buildMissedReport(daysBack) {
 }
 
 /* =========================
-   UI references
+   UI refs
    ========================= */
 
 let selectedDate = null;
@@ -360,7 +529,7 @@ const reportSummaryEl = document.getElementById("reportSummary");
 const reportListEl = document.getElementById("reportList");
 
 /* =========================
-   Render checklist
+   Checklist render
    ========================= */
 
 function renderChecklist(dateStr) {
@@ -381,10 +550,7 @@ function renderChecklist(dateStr) {
 
   const dayState = loadDay(dateStr);
 
-  const groups = {
-    AM: tasks.filter(t => t.time === "AM"),
-    PM: tasks.filter(t => t.time === "PM"),
-  };
+  const groups = { AM: tasks.filter(t => t.time === "AM"), PM: tasks.filter(t => t.time === "PM") };
 
   for (const time of ["AM", "PM"]) {
     if (!groups[time].length) continue;
@@ -403,7 +569,7 @@ function renderChecklist(dateStr) {
       cb.checked = !!dayState[task.id];
       cb.addEventListener("change", () => {
         setTaskDone(dateStr, task.id, cb.checked);
-        refreshCalendar();
+        calendar.render();
         renderSummary(dateStr);
         refreshStatsForVisibleWeek();
         renderMissedReport();
@@ -440,8 +606,6 @@ function renderSummary(dateStr) {
 /* =========================
    Stats + report
    ========================= */
-
-function refreshCalendar() { calendar.render(); }
 
 function refreshStatsForVisibleWeek() {
   const view = calendar.view;
@@ -523,7 +687,7 @@ function renderMissedReport() {
 }
 
 /* =========================
-   Calendar init + idiot-proof boot
+   Calendar init + boot
    ========================= */
 
 function initCalendar() {
@@ -535,11 +699,7 @@ function initCalendar() {
     height: "auto",
     fixedWeekCount: false,
 
-    headerToolbar: {
-      left: "prev,next today",
-      center: "title",
-      right: "dayGridMonth,dayGridWeek"
-    },
+    headerToolbar: { left: "prev,next today", center: "title", right: "dayGridMonth,dayGridWeek" },
 
     dateClick: (info) => renderChecklist(info.dateStr),
 
@@ -551,7 +711,6 @@ function initCalendar() {
       if (!tasks.length) return;
 
       const { done, total } = getProgress(dateStr, tasks);
-
       const top = args.el.querySelector(".fc-daygrid-day-top");
       if (!top) return;
 
@@ -574,35 +733,17 @@ function initCalendar() {
 }
 
 function boot() {
-  // Fail loudly if FullCalendar didn't load (blocked CDN)
   if (!window.FullCalendar) {
-    const cal = document.getElementById("calendar");
-    cal.innerHTML = `
-      <div style="padding:12px;border:1px solid #1f2a36;border-radius:12px;background:#0b1016;">
+    document.getElementById("calendar").innerHTML =
+      `<div style="padding:12px;border:1px solid #1f2a36;border-radius:12px;background:#0b1016;">
         <div style="font-weight:800;margin-bottom:6px;">Calendar library didn’t load</div>
         <div style="opacity:.85;font-size:13px;line-height:1.35;">
-          Your network may be blocking the CDN. Try a different network or run a local server.<br/>
-          Local server: <code>python -m http.server 8000</code> then open <code>http://localhost:8000</code>
+          Your network may be blocking the CDN.
         </div>
       </div>`;
-    console.error("FullCalendar not loaded. CDN blocked?");
     return;
   }
-
-  try {
-    initCalendar();
-  } catch (e) {
-    const cal = document.getElementById("calendar");
-    cal.innerHTML = `
-      <div style="padding:12px;border:1px solid #1f2a36;border-radius:12px;background:#0b1016;">
-        <div style="font-weight:800;margin-bottom:6px;">App crashed during startup</div>
-        <div style="opacity:.85;font-size:13px;line-height:1.35;">
-          Open DevTools Console to see the error.<br/>
-          (On Mac: ⌥⌘I, on Windows: Ctrl+Shift+I)
-        </div>
-      </div>`;
-    console.error(e);
-  }
+  initCalendar();
 }
 
 /* =========================
@@ -639,16 +780,14 @@ document.getElementById("importInput").addEventListener("change", async (e) => {
     const store = {
       template: parsed.template ? parsed.template : deepClone(defaultTemplate),
       data: parsed.data ? parsed.data : (parsed || {}),
+      updated_ms: typeof parsed.updated_ms === "number" ? parsed.updated_ms : Date.now()
     };
 
-    saveStore(store);
-
-    if (calendar) {
-      calendar.render();
-      renderChecklist(selectedDate || todayStrLocal());
-      refreshStatsForVisibleWeek();
-      renderMissedReport();
-    }
+    saveLocalStore(store);
+    calendar.render();
+    renderChecklist(selectedDate || todayStrLocal());
+    refreshStatsForVisibleWeek();
+    renderMissedReport();
   } catch (err) {
     alert("Import failed: " + (err?.message || String(err)));
   } finally {
@@ -660,12 +799,12 @@ document.getElementById("wipeBtn").addEventListener("click", () => {
   const ok = confirm("Wipe ALL tracking data and template? This cannot be undone.");
   if (!ok) return;
   localStorage.removeItem(STORAGE_KEY);
-  if (calendar) {
-    calendar.render();
-    renderChecklist(todayStrLocal());
-    refreshStatsForVisibleWeek();
-    renderMissedReport();
-  }
+  // Re-seed defaults locally
+  saveLocalStore({ template: deepClone(defaultTemplate), data: {}, updated_ms: 0 });
+  calendar.render();
+  renderChecklist(todayStrLocal());
+  refreshStatsForVisibleWeek();
+  renderMissedReport();
 });
 
 markAllBtn.addEventListener("click", () => {
@@ -691,13 +830,8 @@ clearDayBtn.addEventListener("click", () => {
   renderMissedReport();
 });
 
-document.getElementById("refreshReportBtn").addEventListener("click", () => {
-  renderMissedReport();
-});
-
-document.getElementById("reportRangeSelect").addEventListener("change", () => {
-  renderMissedReport();
-});
+refreshReportBtn.addEventListener("click", () => renderMissedReport());
+reportRangeSelect.addEventListener("change", () => renderMissedReport());
 
 /* =========================
    Template Editor
@@ -889,12 +1023,7 @@ modalBackdrop.addEventListener("click", closeModal);
 
 addTaskBtn.addEventListener("click", () => {
   ensureDayArray(activeEditorDow);
-  draftTemplate[activeEditorDow].push({
-    id: makeId(),
-    time: "PM",
-    label: "New task",
-    meta: ""
-  });
+  draftTemplate[activeEditorDow].push({ id: makeId(), time: "PM", label: "New task", meta: "" });
   renderEditorDay(activeEditorDow);
 });
 
@@ -919,11 +1048,75 @@ saveTemplateBtn.addEventListener("click", () => {
 });
 
 /* =========================
-   Final boot (DOM ready)
+   Auth UI wiring + boot
    ========================= */
 
+signInBtn.addEventListener("click", async () => {
+  if (!supabaseClient) {
+    alert("Supabase not configured yet. Paste your SUPABASE_URL and SUPABASE_ANON_KEY in app.js.");
+    return;
+  }
+  const email = String(authEmailEl.value || "").trim();
+  if (!email.includes("@")) {
+    alert("Enter a valid email address.");
+    return;
+  }
+
+  try {
+    setSyncStatus("Sending magic link…");
+    await signInWithMagicLink(email);
+    setSyncStatus("Check your email (magic link sent)");
+  } catch (e) {
+    console.error(e);
+    setSyncStatus("Sign-in error");
+    alert("Sign-in failed: " + (e?.message || String(e)));
+  }
+});
+
+signOutBtn.addEventListener("click", async () => {
+  try {
+    await signOut();
+    currentUserId = null;
+    setSyncStatus("Local only (signed out)");
+    signOutBtn.classList.add("hidden");
+  } catch (e) {
+    console.error(e);
+    alert("Sign out failed: " + (e?.message || String(e)));
+  }
+});
+
+async function startSupabaseListeners() {
+  if (!supabaseClient) return;
+
+  await refreshAuthState();
+
+  supabaseClient.auth.onAuthStateChange(async (_event, session) => {
+    currentUserId = session?.user?.id || null;
+    await refreshAuthState();
+    if (currentUserId) {
+      // After login, pull latest cloud state and re-render
+      await pullCloudToLocal();
+      calendar.render();
+      renderChecklist(selectedDate || todayStrLocal());
+      refreshStatsForVisibleWeek();
+      renderMissedReport();
+    }
+  });
+
+  // On boot: if already signed in on this device, sync once
+  if (currentUserId) {
+    await pullCloudToLocal();
+  }
+}
+
 if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", boot);
+  document.addEventListener("DOMContentLoaded", async () => {
+    boot();
+    await startSupabaseListeners();
+  });
 } else {
-  boot();
+  (async () => {
+    boot();
+    await startSupabaseListeners();
+  })();
 }

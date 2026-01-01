@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Weekly Habit Calendar</title>
 
-  <!-- FullCalendar (UNPKG CDN: often less blocked than jsdelivr) -->
+  <!-- FullCalendar -->
   <link rel="stylesheet" href="https://unpkg.com/fullcalendar@6.1.15/index.global.min.css">
   <link rel="stylesheet" href="style.css" />
 </head>
@@ -14,6 +14,13 @@
     <h1>Weekly Habit Calendar</h1>
 
     <div class="header-actions">
+      <div class="authBox">
+        <input id="authEmail" type="email" placeholder="you@email.com" />
+        <button id="signInBtn" type="button">Sign in</button>
+        <button id="signOutBtn" type="button" class="hidden">Sign out</button>
+        <span id="syncStatus" class="syncStatus">Local only</span>
+      </div>
+
       <button id="editTemplateBtn" type="button">Edit weekly template</button>
 
       <button id="exportBtn" type="button">Export</button>
@@ -146,10 +153,14 @@
     </div>
   </div>
 
-  <!-- FullCalendar JS (UNPKG) -->
+  <!-- FullCalendar -->
   <script src="https://unpkg.com/fullcalendar@6.1.15/index.global.min.js"></script>
 
-  <!-- Your app -->
+  <!-- Supabase JS via CDN (supported approach) -->
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <!-- Docs show CDN usage for supabase-js -->
+  <!-- https://supabase.com/docs/reference/javascript/installing -->
+
   <script src="app.js"></script>
 </body>
 </html>
