@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Weekly Habit Calendar</title>
+
+  <!-- FullCalendar (UNPKG CDN: often less blocked than jsdelivr) -->
+  <link rel="stylesheet" href="https://unpkg.com/fullcalendar@6.1.15/index.global.min.css">
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>Weekly Habit Calendar</h1>
+
+    <div class="header-actions">
+      <button id="editTemplateBtn" type="button">Edit weekly template</button>
+
+      <button id="exportBtn" type="button">Export</button>
+      <label class="importLabel">
+        Import
+        <input id="importInput" type="file" accept="application/json" />
+      </label>
+
+      <button id="wipeBtn" type="button" class="danger">Wipe all data</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="calendarPanel">
+      <div id="calendar"></div>
+
+      <div class="statsPanel">
+        <div class="statsTitle">This week (visible range)</div>
+
+        <div class="statsGrid">
+          <div class="stat">
+            <div class="statLabel">Weekly completion</div>
+            <div class="statValue" id="weeklyCompletion">—</div>
+            <div class="statMeta" id="weeklyCompletionMeta">—</div>
+          </div>
+          <div class="stat">
+            <div class="statLabel">Current streak</div>
+            <div class="statValue" id="currentStreak">—</div>
+            <div class="statMeta">Consecutive fully completed days ending today</div>
+          </div>
+          <div class="stat">
+            <div class="statLabel">Best streak</div>
+            <div class="statValue" id="bestStreak">—</div>
+            <div class="statMeta">Longest run of fully completed days</div>
+          </div>
+        </div>
+
+        <div class="reportPanel">
+          <div class="reportHeader">
+            <div class="reportTitle">Missed tasks report (missed days only)</div>
+            <div class="reportControls">
+              <label class="reportLabel">
+                Range
+                <select id="reportRangeSelect">
+                  <option value="7">Last 7 days</option>
+                  <option value="30">Last 30 days</option>
+                </select>
+              </label>
+              <button id="refreshReportBtn" type="button">Refresh</button>
+            </div>
+          </div>
+
+          <div class="reportSummary" id="reportSummary">—</div>
+          <div class="reportList" id="reportList"></div>
+        </div>
+
+        <p class="hint">
+          Click a date to see that day’s checklist. Each date shows <strong>done/total</strong>.
+          Incomplete days stay highlighted so you can review consistency.
+        </p>
+      </div>
+    </section>
+
+    <section class="checklistPanel">
+      <div class="checklistHeader">
+        <h2 id="selectedDateTitle">Select a date</h2>
+        <div class="checklistActions">
+          <button id="todayBtn" type="button">Today</button>
+          <button id="markAllBtn" type="button" disabled>Mark all done</button>
+          <button id="clearDayBtn" type="button" disabled>Clear day</button>
+        </div>
+      </div>
+
+      <div id="checklist"></div>
+      <div class="summary" id="daySummary"></div>
+    </section>
+  </main>
+
+  <!-- Template Editor Modal -->
+  <div id="templateModal" class="modal hidden" aria-hidden="true">
+    <div class="modalBackdrop" id="modalBackdrop"></div>
+
+    <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div class="modalHeader">
+        <div>
+          <div class="modalTitle" id="modalTitle">Edit Weekly Template</div>
+          <div class="modalSubtitle">
+            Change what appears on each day (AM/PM). Past checkmarks remain saved by date.
+          </div>
+        </div>
+        <button id="closeModalBtn" class="iconBtn" type="button" aria-label="Close">✕</button>
+      </div>
+
+      <div class="modalBody">
+        <div class="dayTabs" id="dayTabs"></div>
+
+        <div class="editorGrid">
+          <div class="editorList">
+            <div class="editorHeaderRow">
+              <div class="editorHeader">Tasks for <span id="editorDayName">—</span></div>
+              <button id="addTaskBtn" type="button">+ Add task</button>
+            </div>
+
+            <div id="taskEditorList"></div>
+          </div>
+
+          <div class="editorHelp">
+            <div class="helpBox">
+              <div class="helpTitle">Tips</div>
+              <ul>
+                <li><strong>Time</strong> is just a label (AM/PM).</li>
+                <li>Edit <strong>Label</strong> and <strong>Meta</strong> freely.</li>
+                <li>Typing <strong>Cycling</strong> or <strong>Bed of Nails + Massage</strong> auto-fills <strong>45 min</strong>.</li>
+              </ul>
+            </div>
+
+            <div class="helpBox">
+              <div class="helpTitle">Reset</div>
+              <p class="helpText">Restore the original template.</p>
+              <button id="resetTemplateBtn" type="button" class="danger">Reset to default template</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modalFooter">
+        <button id="cancelModalBtn" type="button">Cancel</button>
+        <button id="saveTemplateBtn" type="button" class="primary">Save template</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- FullCalendar JS (UNPKG) -->
+  <script src="https://unpkg.com/fullcalendar@6.1.15/index.global.min.js"></script>
+
+  <!-- Your app -->
+  <script src="app.js"></script>
+</body>
+</html>
