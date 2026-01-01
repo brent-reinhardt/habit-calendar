@@ -815,17 +815,33 @@ document.getElementById("importInput").addEventListener("change", async (e) => {
   }
 });
 
-document.getElementById("wipeBtn").addEventListener("click", () => {
-  const ok = confirm("Wipe ALL tracking data and template? This cannot be undone.");
-  if (!ok) return;
+document.getElementById("wipeBtn").addEventListener("click", async () => {
+  const phrase = "WIPE";
+  const msg =
+    `⚠️ This will permanently delete ALL data (template + history) for your account.\n\n` +
+    `To confirm, type ${phrase} exactly:`;
+
+  const typed = prompt(msg);
+  if (typed !== phrase) {
+    alert("Cancelled. Nothing was deleted.");
+    return;
+  }
+
+  // Local wipe
   localStorage.removeItem(STORAGE_KEY);
-  // Re-seed defaults locally
   saveLocalStore({ template: deepClone(defaultTemplate), data: {}, updated_ms: 0 });
+
+  // Optional: also push the wiped state to cloud immediately if signed in
+  try { await pushLocalToCloud?.(); } catch (e) { console.error(e); }
+
   calendar.render();
   renderChecklist(todayStrLocal());
   refreshStatsForVisibleWeek();
   renderMissedReport();
+
+  alert("Wiped successfully.");
 });
+
 
 markAllBtn.addEventListener("click", () => {
   if (!selectedDate) return;
@@ -1146,3 +1162,4 @@ if (document.readyState === "loading") {
     await startSupabaseListeners();
   })();
 }
+
