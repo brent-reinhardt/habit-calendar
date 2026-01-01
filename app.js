@@ -1099,7 +1099,6 @@ signInBtn.addEventListener("click", async () => {
   }
 });
 
-
 signOutBtn.addEventListener("click", async () => {
   try {
     await signOut();
@@ -1147,4 +1146,3 @@ if (document.readyState === "loading") {
     await startSupabaseListeners();
   })();
 }
-
